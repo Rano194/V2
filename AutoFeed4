@@ -1,0 +1,109 @@
+local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+local petName = "birthday_2025_butterfly"
+local PerPotion = 2
+
+-- === Функции ===
+local function getPlayerData()
+    return clientData.get_data()[tostring(game.Players.LocalPlayer)]
+end
+
+local function getAgePotions()
+    local potions = {}
+    for _, item in pairs(getPlayerData().inventory.food or {}) do
+        if item.kind == "pet_age_potion" then
+            table.insert(potions, item)
+        end
+    end
+    return potions
+end
+
+local function getPets(petName)
+    local pets = {}
+    for _, pet in pairs(getPlayerData().inventory.pets or {}) do
+        if pet.kind == petName and pet.properties.age < 6 then
+            table.insert(pets, pet)
+        end
+    end
+    return pets
+end
+
+local function waitForPetAge(unique, timeout)
+    targetAge = 6
+    timeout = timeout or 5
+    local t0 = os.clock()
+
+    while os.clock() - t0 < timeout do
+        local inv = getPlayerData().inventory
+        for _, pet in pairs(inv and inv.pets or {}) do
+            if pet.unique == unique then
+                local age = (pet.properties and pet.properties.age) or 0
+                if age >= targetAge then
+                    return true
+                end
+                break
+            end
+        end
+        task.wait(0.1)
+    end
+    return false
+end
+
+-- === Основной цикл ===
+while true do
+    local agePotions = getAgePotions()
+    local pets = getPets(petName)
+
+    if #agePotions < PerPotion then
+        warn("❌ Зелья закончились (" .. #agePotions .. "/" .. PerPotion .. ")")
+        break
+    end
+
+    if #pets == 0 then
+        break
+    end
+
+    local selectedPet = table.remove(pets, 1)
+    local selectedPotions = {}
+    for i = 1, PerPotion do
+        table.insert(selectedPotions, table.remove(agePotions, 1))
+    end
+
+    game.ReplicatedStorage.API["ToolAPI/Equip"]:InvokeServer(selectedPet.unique, {use_sound_delay = true})
+    game.ReplicatedStorage.API["ToolAPI/Equip"]:InvokeServer(selectedPotions[1].unique, {use_sound_delay = true})
+    task.wait(0.2)
+
+    local potionUniques = {}
+    for i = 1, PerPotion - 1 do
+        table.insert(potionUniques, selectedPotions[i].unique)
+    end
+
+    local ok, err = pcall(function()
+        game.ReplicatedStorage.API["PetObjectAPI/CreatePetObject"]:InvokeServer(
+            "__Enum_PetObjectCreatorType_2",
+            {
+                additional_consume_uniques = potionUniques,
+                pet_unique = selectedPet.unique,
+                unique_id = selectedPotions[PerPotion].unique
+            }
+        )
+    end)
+    if not ok then warn("Ошибка крафта:", err) end
+
+    local petModel
+    for _ = 1, 50 do
+        local found = workspace:WaitForChild("PetObjects"):FindFirstChildWhichIsA("Model")
+        if found then
+            petModel = found
+            break
+        end
+        task.wait(0.05)
+    end
+
+    if petModel then
+        game.ReplicatedStorage.API["PetAPI/ConsumeFoodObject"]:FireServer(petModel, selectedPet.unique)
+    else
+        warn("Ошибка: не найден модель пета")
+    end
+
+    waitForPetAge(selectedPet.unique, 5)
+end
