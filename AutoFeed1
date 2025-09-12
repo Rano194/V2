@@ -1,0 +1,232 @@
+getgenv().Config = {
+    PetName = "birthday_2025_butterfly", -- <- petName
+    PerPotionPet = 2,                       -- <- PerPotion
+
+    -- ниже опционально:
+    PotionKind = "pet_age_potion",
+    AgeTarget = 6,
+    CreatorType = "__Enum_PetObjectCreatorType_2",
+    PetObjectsFolderName = "PetObjects",
+    EquipTimeout = 2,
+    PetObjectTimeout = 3,
+}
+
+
+local cfg = getgenv().Config or {}
+
+local petName = cfg.PetName
+local PerPotion = cfg.PerPotionPet
+
+-- опциональные с дефолтами:
+local PotionKind = cfg.PotionKind or "pet_age_potion"
+local AgeTarget = cfg.AgeTarget or 6
+local CreatorType = cfg.CreatorType or "__Enum_PetObjectCreatorType_2"
+local PetObjectsFolderName = cfg.PetObjectsFolderName or "PetObjects"
+local EquipTimeout = cfg.EquipTimeout or 2
+local PetObjectTimeout = cfg.PetObjectTimeout or 3
+
+-- === СЕРВИСЫ / API ===
+local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+
+local API = RS:WaitForChild("API")
+local EquipRemote = API:WaitForChild("ToolAPI/Equip")
+local CreatePetObject = API:WaitForChild("PetObjectAPI/CreatePetObject")
+local ConsumeFoodObject = API:WaitForChild("PetAPI/ConsumeFoodObject")
+
+local clientData = require(RS.ClientModules.Core.ClientData)
+
+-- === УТИЛИТЫ ===
+local function getPlayerData()
+    return clientData.get_data()[tostring(LP)]
+end
+
+local function getAgePotions()
+    local potions = {}
+    for _, item in pairs(getPlayerData().inventory.food or {}) do
+        if item.kind == "pet_age_potion" then
+            table.insert(potions, item)
+        end
+    end
+    return potions
+end
+
+local function getPets(petName)
+    local pets = {}
+    for _, pet in pairs(getPlayerData().inventory.pets or {}) do
+        if pet.kind == petName and pet.properties.age < 6 and not pet.properties.mega_neon then
+            table.insert(pets, pet)
+        end
+    end
+    return pets
+end
+
+local function findPetByUnique(unique)
+    for _, pet in pairs(getPlayerData().inventory.pets or {}) do
+        if pet.unique == unique then return pet end
+    end
+end
+
+local function safeInvoke(remote, ...)
+    for attempt = 1, 3 do
+        local ok, res = pcall(function()
+            return remote:InvokeServer(...)
+        end)
+        if ok then return true, res end
+        warn(string.format("[Invoke ERR %d] %s", attempt, tostring(res)))
+        task.wait(0.2 * attempt)
+    end
+    return false, "invoke failed"
+end
+
+local function waitForToolEquipped(timeout)
+    local t0 = os.clock()
+    timeout = timeout or 3
+    local char = LP.Character or LP.CharacterAdded:Wait()
+    while os.clock() - t0 < timeout do
+        if char:FindFirstChildOfClass("Tool") then return true end
+        task.wait(0.05)
+    end
+    return false
+end
+
+local function waitForPetAge(unique, targetAge, timeout)
+    local t0 = os.clock()
+    timeout = timeout or 5
+    while os.clock() - t0 < timeout do
+        local pet = findPetByUnique(unique)
+        if not pet then return true end -- мог исчезнуть после фьюза/измениться; не блокируем
+        if (pet.properties.age or 0) >= targetAge then return true end
+        task.wait(0.1)
+    end
+    return false
+end
+
+local petObjectsFolder = workspace:WaitForChild("PetObjects")
+
+local function waitForPetObject(timeout)
+    local created
+    local conn
+    timeout = timeout or 3
+
+    conn = petObjectsFolder.ChildAdded:Connect(function(child)
+        if child:IsA("Model") then
+            created = child
+        end
+    end)
+
+    local t0 = os.clock()
+    while os.clock() - t0 < timeout and not created do
+        -- На случай если объект уже появился:
+        created = petObjectsFolder:FindFirstChildWhichIsA("Model")
+        if created then break end
+        task.wait(0.05)
+    end
+
+    if conn then conn:Disconnect() end
+    return created
+end
+
+-- === ОСНОВНОЙ ЦИКЛ ===
+while true do
+    -- 1) Проверяем ресурсы
+    local agePotions = getAgePotions()
+    if #agePotions < PerPotion then
+        warn(string.format("❌ Зелей недостаточно: %d/%d", #agePotions, PerPotion))
+        break
+    end
+
+    local pets = getPets(petName)
+    if #pets == 0 then
+        warn("⏳ Жду новых петов...")
+        repeat
+            task.wait(2)
+            pets = getPets(petName)
+        until #pets > 0
+        warn("✅ Найдены новые петы!")
+    end
+
+    -- 2) Берём 1 пета и нужное число зелий
+    local selectedPet = table.remove(pets, 1)
+    if not selectedPet then
+        warn("❌ Не удалось взять пета из списка")
+        task.wait(1)
+        continue
+    end
+
+    -- Разложение зелий: main (экипируем и передаём как unique_id), остальные -> additional
+    local selectedPotions = {}
+    for i = 1, PerPotion do
+        selectedPotions[i] = agePotions[i]
+        if not selectedPotions[i] then
+            warn("❌ Во время отбора зелей инвентарь изменился. Повтор.")
+            task.wait(0.5)
+            continue
+        end
+    end
+
+    local mainPotion = selectedPotions[1] -- то самое, которое мы экипируем
+    local additional_uniques = {}
+    for i = 2, PerPotion do
+        table.insert(additional_uniques, selectedPotions[i].unique)
+    end
+
+    -- 3) Экипируем пета и главное зелье (в таком порядке)
+    do
+        local ok1 = safeInvoke(EquipRemote, selectedPet.unique, { use_sound_delay = true })
+        if not ok1 then
+            warn("❌ Не удалось экипировать пета. Пропуск итерации.")
+            task.wait(0.5)
+            continue
+        end
+        task.wait(0.1)
+
+        local ok2 = safeInvoke(EquipRemote, mainPotion.unique, { use_sound_delay = true })
+        if not ok2 then
+            warn("❌ Не удалось экипировать главное зелье. Пропуск итерации.")
+            task.wait(0.5)
+            continue
+        end
+
+        -- Немного подождать, чтобы клиент реально взял Tool
+        waitForToolEquipped(2)
+    end
+
+    -- 4) Создаём объект корма под пета (важно: unique_id = ЭКИПИРОВАННОЕ зелье)
+    local createdModel
+    do
+        -- Слушаем появление нового PetObject
+        local watcherReady = true
+        local ok, _ = safeInvoke(CreatePetObject, "__Enum_PetObjectCreatorType_2", {
+            additional_consume_uniques = additional_uniques,
+            pet_unique = selectedPet.unique,
+            unique_id = mainPotion.unique, -- ВАЖНО: совпадает с тем, что экипировано
+        })
+
+        if not ok then
+            warn("❌ CreatePetObject вернул ошибку. Пробую продолжить осторожно.")
+        end
+
+        createdModel = waitForPetObject(3)
+        if not createdModel then
+            warn("❌ Объект пета не появился. Пропуск итерации.")
+            task.wait(0.2)
+            continue
+        end
+    end
+
+    -- 5) Кормим объектом (завершаем прокачку)
+    do
+        local ok, _ = pcall(function()
+            ConsumeFoodObject:FireServer(createdModel, selectedPet.unique)
+        end)
+        if not ok then
+            warn("❌ Ошибка ConsumeFoodObject (FireServer).")
+        end
+    end
+
+    -- 6) Подождать обновление возраста / инвентаря (чтобы не словить гонку)
+    waitForPetAge(selectedPet.unique, 6, 5)
+    task.wait(0.2)
+end
