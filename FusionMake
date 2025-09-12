@@ -1,0 +1,58 @@
+local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+
+function GetPetsForNeon()
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+    local petGroups = {}
+
+    for _, pet in pairs(playerData.inventory.pets or {}) do
+        if pet.properties.age == 6 and not pet.properties.neon and not pet.properties.mega_neon then
+            petGroups[pet.kind] = petGroups[pet.kind] or {}
+            table.insert(petGroups[pet.kind], pet)
+        end
+    end
+
+    return petGroups
+end
+
+function GetPetsForMega()
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+    local petGroups = {}
+
+    for _, pet in pairs(playerData.inventory.pets or {}) do
+        if pet.properties.age == 6 and pet.properties.neon and not pet.properties.mega_neon then
+            petGroups[pet.kind] = petGroups[pet.kind] or {}
+            table.insert(petGroups[pet.kind], pet)
+        end
+    end
+
+    return petGroups
+end
+
+function DoFusion(pets)
+    local args = {}
+    for i = 1, 4 do
+        table.insert(args, pets[i].unique)
+    end
+    game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("PetAPI/DoNeonFusion"):InvokeServer(args)
+end
+
+while true do
+    local neonGroups = GetPetsForNeon()
+    for petName, pets in pairs(neonGroups) do
+        while #pets >= 4 do
+            DoFusion(pets)
+            for i = 1, 4 do table.remove(pets, 1) end
+            task.wait()
+        end
+    end
+
+    local megaGroups = GetPetsForMega()
+    for petName, pets in pairs(megaGroups) do
+        while #pets >= 4 do
+            DoFusion(pets)
+            for i = 1, 4 do table.remove(pets, 1) end
+            task.wait()
+        end
+    end
+    task.wait() 
+end
