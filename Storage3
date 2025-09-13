@@ -1,0 +1,165 @@
+local requestFunc = syn and syn.request or http_request or request
+
+local petName = getgenv().Config["PetName"]
+local AutoFuse = getgenv().Config["AutoFuse"]
+
+task.wait(5)
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/Others/refs/heads/main/Dehash"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/Others/refs/heads/main/PlayButtnonNew"))()
+
+--
+
+local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+
+local count = 0
+for _, pet in pairs(playerData.inventory.pets or {}) do
+    if pet.kind == petName and pet.properties.age < 6 and not pet.properties.mega_neon then
+        count += 1
+    end
+end
+
+local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SetPetsStock?int="..count, Method = "GET" })
+
+-- function
+function GetFilteredPets(petName, maxCount)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+    local filteredPets = {}
+
+    -- getting classic pets
+    for _, pet in pairs(playerData.inventory.pets or {}) do
+        if #filteredPets >= maxCount then break end
+        if pet.kind == petName and pet.properties.age < 6 and not pet.properties.mega_neon and not pet.properties.neon then
+            table.insert(filteredPets, pet)
+        end
+    end
+
+    -- if no classic pets, getting neon
+    if #filteredPets < maxCount then
+        for _, pet in pairs(playerData.inventory.pets or {}) do
+            if #filteredPets >= maxCount then break end
+            if pet.kind == petName and pet.properties.age < 6 and not pet.properties.mega_neon and pet.properties.neon then
+                table.insert(filteredPets, pet)
+            end
+        end
+    end
+
+    return filteredPets
+end
+
+---
+
+local nickname_player_trade = nil
+local trade_checked = false
+
+game.ReplicatedStorage.API["TradeAPI/TradeRequestReceived"].OnClientEvent:Connect(function(player)
+    if trade_checked == false then
+        trade_checked = true
+        game.ReplicatedStorage.API["TradeAPI/AcceptOrDeclineTradeRequest"]:InvokeServer(player, true)
+        game.Players.LocalPlayer.PlayerGui.DialogApp.Dialog.Visible = false
+        nickname_player_trade = player.Name
+        print("[INFO] Accept trade | "..player.Name)
+    else
+        game.ReplicatedStorage.API["TradeAPI/AcceptOrDeclineTradeRequest"]:InvokeServer(player, false)
+        print("[INFO] Decline trade | "..player.Name)
+    end
+end)
+
+---
+local foundplayer = false
+while true do
+    local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetAccounts", Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    for _, account in ipairs(data) do
+        if account.Status == "WaitingPets" or account.Status == "Ready" then
+            local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SetAccountTrade?Name="..account.Nickname, Method = "GET" })
+            foundplayer = true
+            break
+        end
+    end
+
+    if foundplayer then
+        break
+    else
+        task.wait(30)
+        continue
+    end
+end
+
+-- Make Fusion
+if AutoFuse then
+    task.spawn(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/V2/refs/heads/main/FusionMake"))()
+    end)
+end
+
+-- Main Trade While
+local nextAccount = nil
+while true do
+    task.wait(1)
+    if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then continue end
+
+    local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetAccount?Name="..nickname_player_trade, Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+    if data.message then 
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/DeclineTrade"):FireServer() 
+        trade_checked = false
+        continue 
+    end
+
+    local PetsToCount = data.NeedPets
+    local status = data.Status
+
+    if status == "WaitingPets" then
+        local result = math.min(PetsToCount, 18)
+        local pets = GetFilteredPets(petName, result)
+        local newcountpets = math.max(PetsToCount - result, 0)
+
+        for i, pet in ipairs(pets) do
+            local args = {pet.unique}
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AddItemToOffer"):FireServer(unpack(args))
+            task.wait()
+        end
+
+        while true do
+            if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+                local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SendInfoAccounts?Name="..nickname_player_trade.."&NeedPets="..newcountpets.."&Status=WaitingPets", Method = "GET" })
+                task.wait(5)
+                trade_checked = false
+                break
+            else
+                task.wait(1)
+                game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+                game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+            end
+        end
+    elseif status == "Proccess" then
+        local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetAccounts", Method = "GET" })
+        local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+        for _, account in ipairs(data) do
+            if account.Status == "WaitingPets" or account.Status == "Ready" then
+                local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SetAccountTrade?Name="..account.Nickname, Method = "GET" })
+                break
+            end
+        end
+
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/DeclineTrade"):FireServer()
+
+        task.wait(5)
+        trade_checked = false
+        continue
+    elseif status == "Ready" then 
+        while true do
+            task.wait(0.5)
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+            if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+                task.wait(5)
+                trade_checked = false
+                break
+            end
+        end
+    end
+end
