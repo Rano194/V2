@@ -1,0 +1,199 @@
+local requestFunc = syn and syn.request or http_request or request
+
+StorageAccount = getgenv().Config["StorageAccount"]
+petName = getgenv().Config["PetName"]
+PerPotion = getgenv().Config["PerPotionPet"]
+AutoFuse = getgenv().Config["AutoFuse"]
+
+task.wait(5)
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/Others/refs/heads/main/Dehash"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/Others/refs/heads/main/PlayButtnonNew"))()
+
+--
+
+function GetFilteredPets(maxCount)
+    local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+    local filteredPets = {}
+
+    for _, pet in pairs(playerData.inventory.pets or {}) do
+        if #filteredPets >= maxCount then
+            break
+        end
+
+        for _, target in ipairs(petName) do
+            if pet.kind == target then
+                table.insert(filteredPets, pet)
+                break
+            end
+        end
+    end
+
+    return filteredPets
+end
+
+
+function GetCountPets()
+    local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+
+    local pet_count = 0
+    for _, target in ipairs(petName) do
+        for _, pet in pairs(playerData.inventory.pets or {}) do
+            if pet.kind == target and pet.properties.age < 6 and not pet.properties.mega_neon  then
+                pet_count += 1
+            end
+        end
+    end
+    return pet_count
+end
+
+function AllGetCountPets()
+    local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+
+    local pet_count = 0
+    for _, target in ipairs(petName) do
+        for _, pet in pairs(playerData.inventory.pets or {}) do
+            if pet.kind == target then
+                pet_count += 1
+            end
+        end
+    end
+    return pet_count
+end
+
+local pet_count = GetCountPets()
+
+local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+local pet_age_potion = 0
+for _, item in pairs(playerData.inventory.food or {}) do
+    if item.kind == "pet_age_potion" then
+        pet_age_potion += 1
+    end
+end
+
+local NeedPets = math.floor(pet_age_potion / PerPotion)
+local NeedPets = math.max(NeedPets - pet_count, 0)
+
+local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+
+local pet_count = AllGetCountPets()
+
+if NeedPets == 0 and pet_count == 0 then
+    task.wait(600000)
+end
+
+local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SendInfoAccounts?Name="..game.Players.LocalPlayer.Name.."&NeedPets="..NeedPets.."&Status=WaitingPets", Method = "GET" })
+
+while true do
+    local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetAccountTrade", Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    local pet_count = GetCountPets()
+    if NeedPets <= pet_count then
+        local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SendInfoAccounts?Name="..game.Players.LocalPlayer.Name.."&NeedPets=0&Status=Proccess", Method = "GET" })
+        break
+    end
+
+    if data.message then continue end
+    local nickname = data.TradeAccount
+
+    if nickname ~= game.Players.LocalPlayer.Name then continue end
+    
+    local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetPetsStock", Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    local petsOwnedStorage = data.PetsStock
+
+    if petsOwnedStorage == 0 then
+        local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SendInfoAccounts?Name="..game.Players.LocalPlayer.Name.."&NeedPets=0&Status=Proccess", Method = "GET" })
+        break
+    end
+    local args = {
+        game:GetService("Players"):WaitForChild(StorageAccount)
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/SendTradeRequest"):FireServer(unpack(args))
+    if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then continue end
+
+    while true do
+        task.wait(0.5)
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+
+        if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+            game.Players.LocalPlayer.PlayerGui.DialogApp.Dialog.Visible = false
+            task.wait(7)
+            break
+        end
+    end
+end
+
+-- Make fusion
+
+if AutoFuse then
+    task.spawn(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/V2/refs/heads/main/FusionMake"))()
+    end)
+end
+
+-- Feed age
+
+Complete = false
+
+task.spawn(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Rano194/V2/refs/heads/main/AutoFeedMassive"))()
+end)
+
+while true do
+    task.wait(5)
+    if Complete == true then
+        break
+    end
+end
+
+-- Back Trade
+
+local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/SendInfoAccounts?Name="..game.Players.LocalPlayer.Name.."&NeedPets=0&Status=Ready", Method = "GET" })
+
+while true do
+    local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/GetAccountTrade", Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    local pet_count = AllGetCountPets()
+    if pet_count == 0 then
+        break
+    end
+
+    if data.message then continue end
+    local nickname = data.TradeAccount
+
+    if nickname ~= game.Players.LocalPlayer.Name then continue end
+
+    local args = {
+        game:GetService("Players"):WaitForChild(StorageAccount)
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/SendTradeRequest"):FireServer(unpack(args))
+    if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then continue end
+
+    local pets = GetFilteredPets(18)
+    for i, pet in ipairs(pets) do
+        local args = {pet.unique}
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AddItemToOffer"):FireServer(unpack(args))
+        task.wait()
+    end
+
+    while true do
+        task.wait(0.5)
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+        if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+            task.wait(7)
+            break
+        end
+    end
+end
+
+local res = requestFunc({ Url = "https://temesssss.pythonanywhere.com/api/DelAccount?Name="..game.Players.LocalPlayer.Name, Method = "GET" })
