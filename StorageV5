@@ -1,0 +1,350 @@
+--- Code
+urlwebsite = "http://91.214.78.166:5000"
+apilogin = getgenv().Config["Api-login"]
+petByName = getgenv().Config["PetName"]
+local AutoFuse = getgenv().Config["AutoFuse"]
+
+local requestFunc = syn and syn.request or http_request or request
+
+do -- Check License
+    local res = requestFunc({ Url = urlwebsite.."/api/GetLicense?user="..apilogin, Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    if data.Licence == false then
+        game.Players.LocalPlayer:Kick("Access denied: Username not found or your license has expired.")
+    end
+end
+
+do -- Check storage
+    local res = requestFunc({ Url = urlwebsite.."/api/GetStorageNickname?user="..apilogin, Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    if game.Players.LocalPlayer.Name == data.storage then
+        local test = nil
+    else
+        game.Players.LocalPlayer:Kick("Access denied: Nickname does not match your profile or no nickname has been set")
+    end
+end
+
+do -- Dehash
+    local dehash = function()
+        local function rename(remotename,hashedremote)
+            hashedremote.Name = remotename
+        end
+        
+        table.foreach(getupvalue(require(game:GetService("ReplicatedStorage").ClientModules.Core.RouterClient.RouterClient).init,7),rename)
+    end
+
+    dehash()
+end
+
+do  -- PlayButton
+    local Players = game:GetService("Players")
+    local Player = Players.LocalPlayer
+    local PlayerGui = Player:WaitForChild("PlayerGui")
+
+    local function FireSig(button)
+        if not button then return end
+        pcall(function()
+            for _, connection in ipairs(getconnections(button.MouseButton1Down)) do
+                connection:Fire()
+            end
+            task.wait(0.2)
+            for _, connection in ipairs(getconnections(button.MouseButton1Up)) do
+                connection:Fire()
+            end
+            task.wait(0.2)
+            for _, connection in ipairs(getconnections(button.MouseButton1Click)) do
+                connection:Fire()
+            end
+        end)
+    end
+
+    local function WaitForPlayButton()
+        local maxWait = 30
+        local waited = 0
+        while waited < maxWait do
+            local newsApp = PlayerGui:FindFirstChild("NewsApp")
+            if newsApp and newsApp:FindFirstChild("EnclosingFrame") and newsApp.EnclosingFrame:FindFirstChild("MainFrame") then
+                local playButton = newsApp.EnclosingFrame.MainFrame:FindFirstChild("Buttons")
+                    and newsApp.EnclosingFrame.MainFrame.Buttons:FindFirstChild("PlayButton")
+                if playButton then
+                    return playButton
+                end
+            end
+            waited += 0.5
+            task.wait(0.5)
+        end
+        return nil
+    end
+
+    local playButton = WaitForPlayButton()
+    if playButton then
+        FireSig(playButton)
+    end
+
+    task.wait(10)
+
+    FireSig(game:GetService("Players").LocalPlayer.PlayerGui.DialogApp.Dialog.ExitButton)
+end
+
+local KindDB = game:GetService("ReplicatedStorage"):WaitForChild("ClientDB"):WaitForChild("Inventory"):WaitForChild("KindDB")
+local kindData = require(KindDB)
+
+-- functions
+local function getPetInfo(petName)
+    for _, itemData in pairs(kindData) do
+        if string.lower(itemData.name) == string.lower(petName) then
+            return {
+                kind = itemData.kind or "unknown",
+                rarity = itemData.rarity or "unknown",
+                imgID = (itemData.image and string.gsub(itemData.image, "rbxassetid://", "")) or "unknown"
+            }
+        end
+    end
+    return {kind = "unknown", rarity = "unknown", imgID = "unknown"}
+end
+
+function GetFilteredPets(maxCount)
+    local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+    local filteredPets = {}
+
+    for _, target in ipairs(petName) do
+        for _, pet in pairs(playerData.inventory.pets or {}) do
+            if #filteredPets >= maxCount then break end
+            if pet.kind == target and pet.properties.age < 6 and not pet.properties.mega_neon and not pet.properties.neon then
+                table.insert(filteredPets, pet)
+            end
+        end
+        if #filteredPets >= maxCount then break end
+    end
+
+    if #filteredPets < maxCount then
+        for _, target in ipairs(petName) do
+            for _, pet in pairs(playerData.inventory.pets or {}) do
+                if #filteredPets >= maxCount then break end
+                if pet.kind == target and pet.properties.age < 6 and not pet.properties.mega_neon and pet.properties.neon then
+                    table.insert(filteredPets, pet)
+                end
+            end
+            if #filteredPets >= maxCount then break end
+        end
+    end
+
+    return filteredPets
+end
+
+
+function UpdateSetPet()
+    local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+    local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+
+    local count = 0
+    for _, target in ipairs(petName) do
+        for _, pet in pairs(playerData.inventory.pets or {}) do
+            if pet.kind == target and pet.properties.age < 6 and not pet.properties.mega_neon  then
+                count += 1
+            end
+        end
+    end
+
+    local res = requestFunc({ Url = urlwebsite.."/api/SetPetsStock?int="..count.."&user="..apilogin, Method = "GET" })
+end
+
+task.spawn(function()
+    while true do
+        task.wait(30)
+        UpdateSetPet()
+    end
+end)
+
+-- Code
+petName = {}
+local CheckRarity = nil
+
+for _, pet in ipairs(petByName) do
+    local info = getPetInfo(pet)
+
+    if not CheckRarity then
+        CheckRarity = info.rarity
+    end
+
+    if info.rarity ~= CheckRarity then
+        game.Players.LocalPlayer:Kick("Access denied: All selected pets must be of the same rarity")
+    end
+
+    table.insert(petName, info.kind)
+end
+
+UpdateSetPet()
+
+local nickname_player_trade = nil
+local trade_checked = false
+
+game.ReplicatedStorage.API["TradeAPI/TradeRequestReceived"].OnClientEvent:Connect(function(player)
+    if trade_checked == false then
+        trade_checked = true
+        game.ReplicatedStorage.API["TradeAPI/AcceptOrDeclineTradeRequest"]:InvokeServer(player, true)
+        game.Players.LocalPlayer.PlayerGui.DialogApp.Dialog.Visible = false
+        nickname_player_trade = player.Name
+    else
+        game.ReplicatedStorage.API["TradeAPI/AcceptOrDeclineTradeRequest"]:InvokeServer(player, false)
+    end
+end)
+
+local foundplayer = false
+while true do
+    local res = requestFunc({ Url = urlwebsite.."/api/GetAccounts?user="..apilogin, Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+    for _, account in ipairs(data) do
+        if account.Status == "WaitingPets" or account.Status == "Ready" then
+            local res = requestFunc({ Url = urlwebsite.."/api/SetAccountTrade?Name="..account.Nickname.."&user="..apilogin, Method = "GET" })
+            foundplayer = true
+            break
+        end
+    end
+
+    if foundplayer then
+        break
+    else
+        task.wait(30)
+        continue
+    end
+end
+
+if AutoFuse then -- Make Fusion
+    task.spawn(function()
+        local clientData = require(game.ReplicatedStorage.ClientModules.Core.ClientData)
+
+        function GetPetsForNeon()
+            local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+            local petGroups = {}
+
+            for _, pet in pairs(playerData.inventory.pets or {}) do
+                if pet.properties.age == 6 and not pet.properties.neon and not pet.properties.mega_neon then
+                    petGroups[pet.kind] = petGroups[pet.kind] or {}
+                    table.insert(petGroups[pet.kind], pet)
+                end
+            end
+
+            return petGroups
+        end
+
+        function GetPetsForMega()
+            local playerData = clientData.get_data()[tostring(game.Players.LocalPlayer)]
+            local petGroups = {}
+
+            for _, pet in pairs(playerData.inventory.pets or {}) do
+                if pet.properties.age == 6 and pet.properties.neon and not pet.properties.mega_neon then
+                    petGroups[pet.kind] = petGroups[pet.kind] or {}
+                    table.insert(petGroups[pet.kind], pet)
+                end
+            end
+
+            return petGroups
+        end
+
+        function DoFusion(pets)
+            local args = {}
+            for i = 1, 4 do
+                table.insert(args, pets[i].unique)
+            end
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("PetAPI/DoNeonFusion"):InvokeServer(args)
+        end
+
+        while true do
+            local neonGroups = GetPetsForNeon()
+            for petName, pets in pairs(neonGroups) do
+                while #pets >= 4 do
+                    DoFusion(pets)
+                    for i = 1, 4 do table.remove(pets, 1) end
+                    task.wait()
+                end
+            end
+
+            local megaGroups = GetPetsForMega()
+            for petName, pets in pairs(megaGroups) do
+                while #pets >= 4 do
+                    DoFusion(pets)
+                    for i = 1, 4 do table.remove(pets, 1) end
+                    task.wait()
+                end
+            end
+            task.wait() 
+        end
+    end)
+end
+
+-- Main Trade While
+local nextAccount = nil
+while true do
+    task.wait(1)
+    if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then continue end
+
+    local res = requestFunc({ Url = urlwebsite.."/api/GetAccounts?Name="..nickname_player_trade.."&user="..apilogin, Method = "GET" })
+    local data = game:GetService("HttpService"):JSONDecode(res.Body)
+    if data.message then 
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/DeclineTrade"):FireServer() 
+        trade_checked = false
+        continue 
+    end
+
+    local PetsToCount = data.NeedPets
+    local status = data.Status
+
+    if status == "WaitingPets" then
+        local result = math.min(PetsToCount, 18)
+        local pets = GetFilteredPets(result)
+        local newcountpets = math.max(PetsToCount - result, 0)
+
+        for i, pet in ipairs(pets) do
+            local args = {pet.unique}
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AddItemToOffer"):FireServer(unpack(args))
+            task.wait()
+        end
+
+        while true do
+            if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+                local res = requestFunc({ Url = urlwebsite.."/api/SendInfoAccounts?Name="..nickname_player_trade.."&NeedPets="..newcountpets.."&Status=WaitingPets&user="..apilogin, Method = "GET" })
+                UpdateSetPet()
+                task.wait(5)
+                trade_checked = false
+                break
+            else
+                task.wait(1)
+                game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+                game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+            end
+        end
+    elseif status == "Proccess" then
+        local res = requestFunc({ Url = urlwebsite.."/api/GetAccounts?user="..apilogin, Method = "GET" })
+        local data = game:GetService("HttpService"):JSONDecode(res.Body)
+
+        for _, account in ipairs(data) do
+            if account.Status == "WaitingPets" or account.Status == "Ready" then
+                local res = requestFunc({ Url = urlwebsite.."/api/SetAccountTrade?Name="..account.Nickname.."&user="..apilogin, Method = "GET" })
+                break
+            end
+        end
+
+        game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/DeclineTrade"):FireServer()
+
+        task.wait(3)
+        trade_checked = false
+        continue
+    elseif status == "Ready" then 
+        while true do
+            task.wait(0.5)
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/AcceptNegotiation"):FireServer()
+            game:GetService("ReplicatedStorage"):WaitForChild("API"):WaitForChild("TradeAPI/ConfirmTrade"):FireServer()
+            if game:GetService("Players").LocalPlayer.PlayerGui.TradeApp.Frame.Visible == false then
+                task.wait(3)
+                trade_checked = false
+                UpdateSetPet()
+                break
+            end
+        end
+    end
+end
